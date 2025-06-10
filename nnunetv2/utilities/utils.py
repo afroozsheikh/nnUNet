@@ -28,6 +28,7 @@ def get_identifiers_from_splitted_dataset_folder(folder: str, file_ending: str):
     files = subfiles(folder, suffix=file_ending, join=False)
     # all files have a 4 digit channel index (_XXXX)
     crop = len(file_ending) + 5
+    # crop = len(file_ending)
     files = [i[:-crop] for i in files]
     # only unique image ids
     files = np.unique(files)
@@ -36,6 +37,10 @@ def get_identifiers_from_splitted_dataset_folder(folder: str, file_ending: str):
 
 def create_paths_fn(folder, files, file_ending, f):
     p = re.compile(re.escape(f) + r"_\d\d\d\d" + re.escape(file_ending))            
+    # p = re.compile(re.escape(f) + r"-\d\d\d\d\d-\d\d\d" + re.escape(file_ending))
+    # p = re.compile(re.escape(f) + re.escape(file_ending))
+    # print(f"re.escape(f): {re.escape(f)}")
+    # print(f"{files[0]}")
     return [join(folder, i) for i in files if p.fullmatch(i)]
 
 
@@ -53,6 +58,7 @@ def create_lists_from_splitted_dataset_folder(folder: str, file_ending: str, ide
     with Pool(processes=num_processes) as pool:
         list_of_lists = pool.starmap(create_paths_fn, params_list)
         
+    # print(f"%%%\nlist of lists: {list_of_lists[:10]}")
     return list_of_lists
 
 
@@ -68,7 +74,10 @@ def get_filenames_of_train_images_and_targets(raw_dataset_folder: str, dataset_j
             dataset[k]['images'] = [os.path.abspath(join(raw_dataset_folder, os.path.expandvars(i))) if not os.path.isabs(os.path.expandvars(i)) else os.path.expandvars(i) for i in dataset[k]['images']]
     else:
         identifiers = get_identifiers_from_splitted_dataset_folder(join(raw_dataset_folder, 'imagesTr'), dataset_json['file_ending'])
+        # print(f"Len identifiers: {len(identifiers)}")
+        # print(f"identifiers: {identifiers[:10]}")
         images = create_lists_from_splitted_dataset_folder(join(raw_dataset_folder, 'imagesTr'), dataset_json['file_ending'], identifiers)
+        # segs = [join(raw_dataset_folder, 'labelsTr', i + "-seg" + dataset_json['file_ending']) for i in identifiers]
         segs = [join(raw_dataset_folder, 'labelsTr', i + dataset_json['file_ending']) for i in identifiers]
         dataset = {i: {'images': im, 'label': se} for i, im, se in zip(identifiers, images, segs)}
     return dataset

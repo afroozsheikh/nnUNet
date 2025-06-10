@@ -15,7 +15,8 @@
 import multiprocessing
 import re
 from multiprocessing import Pool
-from typing import Type
+from typing import Type, Tuple
+import sys
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,14 @@ def verify_labels(label_file: str, readerclass: Type[BaseReaderWriter], expected
     seg, properties = rw.read_seg(label_file)
     found_labels = np.sort(pd.unique(seg.ravel()))  # np.unique(seg)
     unexpected_labels = [i for i in found_labels if i not in expected_labels]
+
+    # line = "#" * 50
+
+    # print(f"{line}\nrw:{rw}\n\n\nseg:{seg}\n\nproperties:{properties}\n\n\nfound lables:{found_labels}\n\nunexpected:{unexpected_labels}\n{line}")
+    
+
+
+    
     if len(found_labels) == 0 and found_labels[0] == 0:
         print('WARNING: File %s only has label 0 (which should be background). This may be intentional or not, '
               'up to you.' % label_file)
@@ -44,74 +53,136 @@ def verify_labels(label_file: str, readerclass: Type[BaseReaderWriter], expected
     return True
 
 
+def check_case_origin(label_file: str, readerclass: type) -> Tuple[str, bool, List[int]]:
+    rw = readerclass()
+    try:
+        # We only need the properties of the segmentation file
+        _, properties_seg = rw.read_seg(label_file)
+
+        if 'sitk_stuff' in properties_seg.keys():
+            origin_seg = properties_seg['sitk_stuff']['origin']
+
+            if len(origin_seg) != 3:
+                return label_file, False, list(origin_seg)
+            else:
+                return label_file, True, list(origin_seg)
+        else:
+            # If not using SimpleITKIO, this check is not relevant for this error
+            return label_file, True, [] # Assume OK if not sitk_stuff
+    except Exception as e:
+        # Catch any errors during reading to prevent process crashes
+        return label_file, False, f"Error during reading: {e}"
+
 def check_cases(image_files: List[str], label_file: str, expected_num_channels: int,
                 readerclass: Type[BaseReaderWriter]) -> bool:
-    rw = readerclass()
+
+    pid = os.getpid()
     ret = True
 
-    images, properties_image = rw.read_images(image_files)
-    segmentation, properties_seg = rw.read_seg(label_file)
+    try:
+        rw = readerclass()
 
-    # check for nans
-    if np.any(np.isnan(images)):
-        print(f'Images contain NaN pixel values. You need to fix that by '
-              f'replacing NaN values with something that makes sense for your images!\nImages:\n{image_files}')
-        ret = False
-    if np.any(np.isnan(segmentation)):
-        print(f'Segmentation contains NaN pixel values. You need to fix that.\nSegmentation:\n{label_file}')
-        ret = False
+        images, properties_image = rw.read_images(image_files)
+        segmentation, properties_seg = rw.read_seg(label_file)
 
-    # check shapes
-    shape_image = images.shape[1:]
-    shape_seg = segmentation.shape[1:]
-    if shape_image != shape_seg:
-        print('Error: Shape mismatch between segmentation and corresponding images. \nShape images: %s. '
-              '\nShape seg: %s. \nImage files: %s. \nSeg file: %s\n' %
-              (shape_image, shape_seg, image_files, label_file))
-        ret = False
+        # check for nans
+        if np.any(np.isnan(images)):
+            print(f'Images contain NaN pixel values. You need to fix that by '
+                f'replacing NaN values with something that makes sense for your images!\nImages:\n{image_files}')
+            ret = False
+        if np.any(np.isnan(segmentation)):
+            print(f'Segmentation contains NaN pixel values. You need to fix that.\nSegmentation:\n{label_file}')
+            ret = False
 
-    # check spacings
-    spacing_images = properties_image['spacing']
-    spacing_seg = properties_seg['spacing']
-    if not np.allclose(spacing_seg, spacing_images):
-        print('Error: Spacing mismatch between segmentation and corresponding images. \nSpacing images: %s. '
-              '\nSpacing seg: %s. \nImage files: %s. \nSeg file: %s\n' %
-              (spacing_images, spacing_seg, image_files, label_file))
-        ret = False
+        # check shapes
+        shape_image = images.shape[1:]
+        shape_seg = segmentation.shape[1:]
+        if shape_image != shape_seg:
+            print('Error: Shape mismatch between segmentation and corresponding images. \nShape images: %s. '
+                '\nShape seg: %s. \nImage files: %s. \nSeg file: %s\n' %
+                (shape_image, shape_seg, image_files, label_file))
+            ret = False
 
-    # check modalities
-    if not len(images) == expected_num_channels:
-        print('Error: Unexpected number of modalities. \nExpected: %d. \nGot: %d. \nImages: %s\n'
-              % (expected_num_channels, len(images), image_files))
-        ret = False
+        # check spacings
+        spacing_images = properties_image['spacing']
+        spacing_seg = properties_seg['spacing']
+        if not np.allclose(spacing_seg, spacing_images):
+            print('Error: Spacing mismatch between segmentation and corresponding images. \nSpacing images: %s. '
+                '\nSpacing seg: %s. \nImage files: %s. \nSeg file: %s\n' %
+                (spacing_images, spacing_seg, image_files, label_file))
+            ret = False
 
-    # nibabel checks
-    if 'nibabel_stuff' in properties_image.keys():
-        # this image was read with NibabelIO
-        affine_image = properties_image['nibabel_stuff']['original_affine']
-        affine_seg = properties_seg['nibabel_stuff']['original_affine']
-        if not np.allclose(affine_image, affine_seg):
-            print('WARNING: Affine is not the same for image and seg! \nAffine image: %s \nAffine seg: %s\n'
-                  'Image files: %s. \nSeg file: %s.\nThis can be a problem but doesn\'t have to be. Please run '
-                  'nnUNetv2_plot_overlay_pngs to verify if everything is OK!\n'
-                  % (affine_image, affine_seg, image_files, label_file))
+        # check modalities
+        if not len(images) == expected_num_channels:
+            print('Error: Unexpected number of modalities. \nExpected: %d. \nGot: %d. \nImages: %s\n'
+                % (expected_num_channels, len(images), image_files))
+            ret = False
 
-    # sitk checks
-    if 'sitk_stuff' in properties_image.keys():
-        # this image was read with SimpleITKIO
-        # spacing has already been checked, only check direction and origin
-        origin_image = properties_image['sitk_stuff']['origin']
-        origin_seg = properties_seg['sitk_stuff']['origin']
-        if not np.allclose(origin_image, origin_seg):
-            print('Warning: Origin mismatch between segmentation and corresponding images. \nOrigin images: %s. '
-                  '\nOrigin seg: %s. \nImage files: %s. \nSeg file: %s\n' %
-                  (origin_image, origin_seg, image_files, label_file))
-        direction_image = properties_image['sitk_stuff']['direction']
-        direction_seg = properties_seg['sitk_stuff']['direction']
-        if not np.allclose(direction_image, direction_seg):
-            print('Warning: Direction mismatch between segmentation and corresponding images. \nDirection images: %s. '
-                  '\nDirection seg: %s. \nImage files: %s. \nSeg file: %s\n' %
-                  (direction_image, direction_seg, image_files, label_file))
+        # nibabel checks
+        if 'nibabel_stuff' in properties_image.keys():
+            # this image was read with NibabelIO
+            affine_image = properties_image['nibabel_stuff']['original_affine']
+            affine_seg = properties_seg['nibabel_stuff']['original_affine']
+            if not np.allclose(affine_image, affine_seg):
+                print('WARNING: Affine is not the same for image and seg! \nAffine image: %s \nAffine seg: %s\n'
+                    'Image files: %s. \nSeg file: %s.\nThis can be a problem but doesn\'t have to be. Please run '
+                    'nnUNetv2_plot_overlay_pngs to verify if everything is OK!\n'
+                    % (affine_image, affine_seg, image_files, label_file))
+
+        # sitk checks
+        if 'sitk_stuff' in properties_image.keys():
+
+
+            # this image was read with SimpleITKIO
+            # spacing has already been checked, only check direction and origin
+            origin_image = properties_image['sitk_stuff']['origin']
+            origin_seg = properties_seg['sitk_stuff']['origin']
+
+
+
+            # if len(origin_image) != 3:
+            #     print(f"[PID {pid}] WARNING: Image origin not 3D. File: {image_files}. Origin: {origin_image} (length {len(origin_image)})", file=sys.stderr)
+            # if len(origin_seg) != 3:
+            #     print(f"[PID {pid}] ERROR: Segmentation origin not 3D. File: {label_file}. Origin: {origin_seg} (length {len(origin_seg)})", file=sys.stderr)
+            #     # Since the original error is due to shape mismatch in np.allclose,
+            #     # setting ret to False here correctly flags the issue.
+            #     ret = False
+            # else: # Only compare if both are 3D to avoid the ValueError
+            #     if not np.allclose(origin_image, origin_seg):
+            #         print(f'[PID {pid}] WARNING: Origin mismatch between segmentation and corresponding images. Origin images: {origin_image}. Origin seg: {origin_seg}. Image files: {image_files}. Seg file: {label_file}', file=sys.stderr)
+
+
+            
+            # origin_image = np.array(properties_image['sitk_stuff']['origin'])[:3]
+            # origin_seg = np.array(properties_seg['sitk_stuff']['origin'])[:3]
+
+            # if len(origin_image) != 3 or len(origin_seg) != 3:
+            #     abnormal_files+=1
+            #     print(f"Expected origin to be 3D, got: {origin_image} ({len(origin_image)})")
+            # print(f"num abnormals:{abnormal_files}")
+            # assert len(origin_image) == 3, f"Expected origin to be 3D, got: {origin_image} ({len(origin_image)})"
+            # assert len(origin_seg) == 3, f"Expected seg origin to be 3D, got: {origin_seg} ({len(origin_seg)})"
+
+            if not np.allclose(origin_image, origin_seg):
+                print('Warning: Origin mismatch between segmentation and corresponding images. \nOrigin images: %s. '
+                    '\nOrigin seg: %s. \nImage files: %s. \nSeg file: %s\n' %
+                    (origin_image, origin_seg, image_files, label_file))
+
+            
+            direction_image = properties_image['sitk_stuff']['direction']
+            direction_seg = properties_seg['sitk_stuff']['direction']
+            if not np.allclose(direction_image, direction_seg):
+                print(f'[PID {pid}] WARNING: Direction mismatch between segmentation and corresponding images. Direction images: {direction_image}. Direction seg: {direction_seg}. Image files: {image_files}. Seg file: {label_file}', file=sys.stderr)
+
+                # print('Warning: Direction mismatch between segmentation and corresponding images. \nDirection images: %s. '
+                #     '\nDirection seg: %s. \nImage files: %s. \nSeg file: %s\n' %
+                #     (direction_image, direction_seg, image_files, label_file))
+
+    except Exception as e:
+        print(f"[PID {pid}] UNCAUGHT EXCEPTION processing {label_file} (image: {image_files}): {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr) # Print full traceback for this specific file
+        ret = False # Mark as failed
 
     return ret
 
@@ -178,13 +249,18 @@ def verify_dataset_integrity(folder: str, num_processes: int = 8) -> None:
     else:
         # old code that uses imagestr and labelstr folders
         labelfiles = subfiles(join(folder, 'labelsTr'), suffix=file_ending, join=False)
+        # because of -seg! +4 -seg --> 4
         label_identifiers = [i[:-len(file_ending)] for i in labelfiles]
+        # label_identifiers = [i[:-(len(file_ending)+4)] for i in labelfiles]
+        print(f"label_identifiers: {label_identifiers[:5]}")
         labels_present = [i in label_identifiers for i in dataset.keys()]
         missing = [i for j, i in enumerate(dataset.keys()) if not labels_present[j]]
         assert all(labels_present), f'not all training cases have a label file in labelsTr. Fix that. Missing: {missing}'
 
     labelfiles = [v['label'] for v in dataset.values()]
     image_files = [v['images'] for v in dataset.values()]
+    
+    # print(f"----\nimagefiles: {image_files}")
 
     # no plans exist yet, so we can't use PlansManager and gotta roll with the default. It's unlikely to cause
     # problems anyway
@@ -197,6 +273,9 @@ def verify_dataset_integrity(folder: str, num_processes: int = 8) -> None:
         labels_valid_consecutive), f'Labels must be in consecutive order (0, 1, 2, ...). The labels {np.array(expected_labels)[1:][~labels_valid_consecutive]} do not satisfy this restriction'
 
     # determine reader/writer class
+    # print(f"dataset keys: {dataset.keys()}")
+    print(f"****\n{dataset[dataset.keys().__iter__().__next__()]}")
+    # print(f"****\n{len(image_files)}, {len(labelfiles)}, {labelfiles}, {image_files}")
     reader_writer_class = determine_reader_writer_from_dataset_json(dataset_json, dataset[dataset.keys().__iter__().__next__()]['images'][0])
 
     # check whether only the desired labels are present
@@ -209,6 +288,7 @@ def verify_dataset_integrity(folder: str, num_processes: int = 8) -> None:
             raise RuntimeError(
                 'Some segmentation images contained unexpected labels. Please check text output above to see which one(s).')
 
+        
         # check whether shapes and spacings match between images and labels
         result = p.starmap(
             check_cases,
@@ -218,6 +298,7 @@ def verify_dataset_integrity(folder: str, num_processes: int = 8) -> None:
         if not all(result):
             raise RuntimeError(
                 'Some images have errors. Please check text output above to see which one(s) and what\'s going on.')
+
 
     # check for nans
     # check all same orientation nibabel

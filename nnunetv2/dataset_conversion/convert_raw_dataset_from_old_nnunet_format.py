@@ -28,11 +28,17 @@ def convert(source_folder, target_dataset_name):
     shutil.copy(join(source_folder, 'dataset.json'), join(nnUNet_raw, target_dataset_name))
 
     dataset_json = load_json(join(nnUNet_raw, target_dataset_name, 'dataset.json'))
-    del dataset_json['tensorImageSize']
-    del dataset_json['numTest']
-    del dataset_json['training']
-    del dataset_json['test']
+    # del dataset_json['tensorImageSize']
+    # del dataset_json['numTest']
+    # del dataset_json['training']
+    # del dataset_json['test']
+    dataset_json.pop('tensorImageSize', None)
+    dataset_json.pop('numTest', None)
+    dataset_json['numTraining'] = len(dataset_json['training'])
+    dataset_json.pop('training', None)
+    dataset_json.pop('test', None)
     dataset_json['channel_names'] = deepcopy(dataset_json['modality'])
+    
     del dataset_json['modality']
 
     dataset_json['labels'] = {j: int(i) for i, j in dataset_json['labels'].items()}
