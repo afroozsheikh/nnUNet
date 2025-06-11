@@ -52,7 +52,11 @@ def generate_visualization_pdf(
    
     pdf_pages = PdfPages(pdf_filename)
 
-    image_titles = ['T1', 'T1ce', 'T2', 'FLAIR', 'Label (GT)', 'Prediction']
+    ## BraTS
+    # image_titles = ['T1', 'T1ce', 'T2', 'FLAIR', 'Label (GT)', 'Prediction']
+
+    ## KiTS
+    image_titles = ['Image', 'Label (GT)', 'Prediction']
 
     if sort_by_dice:
         sorted_cases_items = sorted(sample_mean_dice_scores.items(), key=lambda item: item[1])
@@ -62,24 +66,42 @@ def generate_visualization_pdf(
 
     print(f"Total cases to visualize: {len(sorted_cases_items)}")
     metrics_order = ['Dice', 'FN', 'FP', 'IoU', 'TN', 'TP', 'n_pred', 'n_ref']
+
+    ## BraTS
+    # regions_for_table = {
+    #     (1, 2, 3): "Whole Tumor (1,2,3)",
+    #     (1, 3): "Tumor Core (1,3)",
+    #     (3,): "Enhancing Tumor (3)"
+    # }
+
+    ## KiTS
     regions_for_table = {
-        (1, 2, 3): "Whole Tumor (1,2,3)",
-        (1, 3): "Tumor Core (1,3)",
-        (3,): "Enhancing Tumor (3)"
+        (1, 2, 3): "Kidney",
+        (2, 3): "Masses (2, 3)",
+        2: "Tumor (2)"
     }
 
-    for fname, mean_value in tqdm(sorted_cases_items[:10], desc="Generating PDF pages"):
+
+    for fname, mean_value in tqdm(sorted_cases_items, desc="Generating PDF pages"):
         mean_dice = sample_mean_dice_scores[fname]
         all_metrics_this_case = samples_all_metrics_per_case[fname]
         
 
         #--------------------------------------------------------------------------------------------------------#
         modalities_slices = []
-        for modality_num in range(4):
-            img_path = os.path.join(images_folder, f"{fname}_000{modality_num}.nii.gz")    
+        # for modality_num in range(4):
+        for modality_num in range(1):
+            ## BraTS
+            # img_path = os.path.join(images_folder, f"{fname}_000{modality_num}.nii.gz")    
+
+            ## KiTS
+            img_path = os.path.join(images_folder, f"{fname}_0000.nii.gz")  
             try:
                 img_data = nib.load(img_path).get_fdata().astype(np.float32)
-                modalities_slices.append(img_data[:, :, slice_index])
+                slice_index_kidney = img_data.shape[0] // 2
+                modalities_slices.append(img_data[slice_index_kidney, :, :])
+
+                # modalities_slices.append(img_data[:, :, slice_index])
                 # modalities_slices = [img_data[:, :, slice_index, i] for i in range(4)]
 
             except Exception as e:
@@ -94,7 +116,9 @@ def generate_visualization_pdf(
             continue
         try:
             label_gt_data = nib.load(gt_path).get_fdata().astype(np.float32)
-            gt_slice_data = label_gt_data[:, :, slice_index]
+            # gt_slice_data = label_gt_data[:, :, slice_index]
+            # slice_index_kidney = label_gt_data.shape[0] // 2
+            gt_slice_data = label_gt_data[slice_index_kidney, :, :]
         except Exception as e:
             print(f"Error loading or processing ground truth {gt_path}: {e}. Skipping visualization.")
             continue
@@ -106,7 +130,8 @@ def generate_visualization_pdf(
             continue
         try:
             pred_data = nib.load(pred_nii_path).get_fdata().astype(np.uint8)
-            pred_slice_data = pred_data[:, :, slice_index]
+            # pred_slice_data = pred_data[:, :, slice_index]
+            pred_slice_data = pred_data[slice_index_kidney, :, :]
         except Exception as e:
             print(f"Error loading or processing prediction {pred_nii_path}: {e}. Skipping visualization.")
             continue
@@ -116,18 +141,37 @@ def generate_visualization_pdf(
 
         label_cmap = ListedColormap(['lightgray', '#DC143C', '#FFD700', '#00BFFF'])
         label_colors = label_cmap.colors
+
+        ## BraTS
+        # legend_elements = [
+        #     Patch(facecolor=label_colors[1], label='Enhancing Tumor'),
+        #     Patch(facecolor=label_colors[2], label='Tumor Core'),
+        #     Patch(facecolor=label_colors[3], label='Whole Tumor')
+        # ]
+
+        ## KiTS
         legend_elements = [
-            Patch(facecolor=label_colors[1], label='Enhancing Tumor'),
-            Patch(facecolor=label_colors[2], label='Tumor Core'),
-            Patch(facecolor=label_colors[3], label='Whole Tumor')
+            Patch(facecolor=label_colors[1], label='(1)'),
+            Patch(facecolor=label_colors[2], label='(3)'),
+            Patch(facecolor=label_colors[3], label='Tumor (2)')
         ]
+
         fig = plt.figure(figsize=(24, 10)) 
-        gs = fig.add_gridspec(2, 6, height_ratios=[4, 1])
-        ax_images = [fig.add_subplot(gs[0, i]) for i in range(6)]
+
+        ## BraTS
+        # gs = fig.add_gridspec(2, 6, height_ratios=[4, 1])
+        # ax_images = [fig.add_subplot(gs[0, i]) for i in range(6)]
+
+        ## KiTS
+        gs = fig.add_gridspec(2, 3, height_ratios=[3, 1])
+        ax_images = [fig.add_subplot(gs[0, i]) for i in range(3)]
+
+
         ax_table = fig.add_subplot(gs[1, :])
 
-        for j in range(6):
-            ax_images[j].imshow(imgs_to_display[j], cmap=label_cmap if j >= 4 else 'gray')
+        print(f"Len images to display: {len(imgs_to_display)}")
+        for j in range(3):
+            ax_images[j].imshow(imgs_to_display[j], cmap=label_cmap if j >= 1 else 'gray')
             ax_images[j].axis('off')
             ax_images[j].set_title(image_titles[j], fontsize=10)
         
@@ -144,7 +188,8 @@ def generate_visualization_pdf(
             for metric_name in metrics_order:
                 value = metrics_for_region.get(metric_name)
                 formatted_value = f"{value:.4f}" if isinstance(value, (int, float)) and not np.isnan(value) else "-"
-                metric_dict[metric_name].append(float(formatted_value))
+                # metric_dict[metric_name].append(float(value))
+                metric_dict[metric_name].append(float(value) if value is not None else 0.0)
                 row_data.append(formatted_value)
                 
             table_data.append(row_data)
@@ -164,23 +209,34 @@ def generate_visualization_pdf(
                                 loc='center',
                                 cellLoc='center',
                                 # bbox=[0, 0, 1, 1]
-                                bbox=[0.2, 0.25, 0.6, 0.5]
+                                # bbox=[0.2, 0.32, 0.65, 1.5]
+                                bbox=[0.2, 0.32, 0.6, 1]
                                 ) 
 
         table.auto_set_font_size(False)
         table.set_fontsize(12)
         # table.scale(1.2, 1.2) 
-        table.scale(2, 2)   
+        table.scale(2, 2.8)   
+
+        mean_row_idx = len(table_data) - 1  
+        for col_idx in range(len(metrics_order)):
+            cell = table[(mean_row_idx + 1, col_idx)]  
+            cell.get_text().set_fontweight('bold')
+
+        row_label_cell = table[(mean_row_idx + 1, -1)]
+        row_label_cell.get_text().set_fontweight('bold')
+
 
         ax_table.axis('off') 
 
         prediction_file_basename = os.path.basename(pred_nii_path)
 
-        fig_title_text = f"Case: {fname} | Mean Dice: {mean_dice:.4f} | Mean IoU: {np.mean(metric_dict['IoU']):.4f}"
-        fig.suptitle(fig_title_text, fontsize=14, y=0.88) 
+        fig_title_text = f"Case: {fname} | Mean Dice: {mean_dice:.4f} | Mean IoU: {np.mean(metric_dict['IoU']):.4f} | Slice Index: {slice_index_kidney}"
+        fig.suptitle(fig_title_text, fontsize=14, fontweight='bold', y=0.9) 
 
         plt.tight_layout()
-        plt.subplots_adjust(top=0.93, bottom=0.05, hspace=0.1) 
+        # plt.subplots_adjust(top=0.93, bottom=0.05, hspace=0.1) 
+        plt.subplots_adjust(top=1, bottom=0.05, hspace=0.05) 
 
         pdf_pages.savefig(fig)
         plt.close(fig)
